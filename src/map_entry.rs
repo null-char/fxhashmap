@@ -27,14 +27,12 @@ impl<K: Hash + Eq, V> Default for MapEntry<K, V> {
     }
 }
 
-// impl<K: Hash + Eq, V> FromIterator<MapEntry<K, V>> for MapEntry<K, V> {}
-
 #[derive(Clone, Copy, Debug)]
 pub struct Entry<K: Hash + Eq, V> {
     key: K,
     value: V,
     hash: HashValue,
-    /// The probe sequence length. This will be used to resolve hash conflicts in a robinhood fashion.
+    /// The probe sequence length. In this context it is the amount of distance the entry is from relative to its initial slot (hash mod len).
     psl: usize,
 }
 
