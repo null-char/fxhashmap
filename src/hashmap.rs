@@ -52,6 +52,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         }
     }
 
+    /// Creates a `FxHashMap` with both an initial capacity and a custom hasher.
     pub fn with_capacity_and_hasher(initial_capacity: usize, hasher_builder: H) -> Self {
         let mut map = FxHashMap::with_hasher(hasher_builder);
         let mut inner: Vec<MapEntry<K, V>> = Vec::with_capacity(initial_capacity);
@@ -63,7 +64,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
 
     /// Inserts a value with its associated key into the hashmap. Time complexity should be amortized O(1).
     pub fn insert(&mut self, key: K, value: V) {
-        // Load Factor of 0.75
+        // Load Factor of 0.75 (can be upped to 0.85 or so once robinhood implementation is complete)
         if self.inner.is_empty() || self.num_items > 3 * self.inner.len() / 4 {
             self.resize();
         }
@@ -117,6 +118,9 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         }
     }
 
+    /// Gets the appropriate value given a valid key. Returns `None` if the key value mapping does not exist.
+    /// NOTE: Current implementation is somewhat inefficient in the case of failed lookups since we would just probe until the end of
+    /// the backing vector. Ideally we should be storing the max PSL recorded so that we can smartly decide when to stop the probing.
     pub fn get(&self, key: &K) -> Option<&V> {
         let hash = self.hash_key(key);
         let slot = hash % self.inner.len();
@@ -201,8 +205,23 @@ mod tests {
         let value_to_insert: i32 = 123;
 
         hashmap.insert("hello", value_to_insert);
-        println!("Capacity: {:?}", hashmap.size());
-
         assert_eq!(*hashmap.get(&"hello").unwrap(), value_to_insert);
+    }
+
+    #[test]
+    fn it_inserts_values_with_initial_capacity() {
+        let mut book_reviews = FxHashMap::with_capacity(10);
+        let key = "The Adventures of Sherlock Holmes".to_string();
+        let value = "Eye lyked it alot.".to_string();
+
+        book_reviews.insert(key, value);
+
+        assert_eq!(book_reviews.capacity(), 10);
+        assert_eq!(
+            *book_reviews
+                .get(&String::from("The Adventures of Sherlock Holmes"))
+                .unwrap(),
+            String::from("Eye lyked it alot.")
+        );
     }
 }
