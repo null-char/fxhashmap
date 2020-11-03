@@ -132,6 +132,8 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
                 if *entry.get_key() == *key {
                     return Some(entry.get_value());
                 }
+            } else {
+                return None;
             }
 
             i += 1;
