@@ -29,11 +29,11 @@ impl<K: Hash + Eq, V> Default for MapEntry<K, V> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Entry<K: Hash + Eq, V> {
-    key: K,
-    value: V,
-    hash: HashValue,
-    /// The probe sequence length. In this context it is the amount of distance the entry is from relative to its initial slot (hash mod len).
-    psl: usize,
+    pub key: K,
+    pub value: V,
+    pub hash: HashValue,
+    /// The probe sequence length. The PSL of an entry is the number of probes required to find the key during lookup.
+    pub psl: usize,
 }
 
 impl<K: Hash + Eq, V> Entry<K, V> {
@@ -44,21 +44,5 @@ impl<K: Hash + Eq, V> Entry<K, V> {
             hash,
             psl,
         }
-    }
-
-    pub fn get_as_owned(self) -> (K, V, usize) {
-        return (self.key, self.value, self.hash);
-    }
-
-    pub fn get_key(&self) -> &K {
-        &self.key
-    }
-
-    pub fn get_value(&self) -> &V {
-        &self.value
-    }
-
-    pub fn get_hash(&self) -> HashValue {
-        self.hash
     }
 }
