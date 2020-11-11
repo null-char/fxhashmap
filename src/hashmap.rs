@@ -71,17 +71,16 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
 
         let hash = self.hash_key(&key);
         // Handles insertion logic
-        self.insert_with_hash(key, value, hash);
+        self.insert_entry(Entry::new(key, value, hash, 0));
     }
 
-    fn insert_with_hash(&mut self, key: K, value: V, hash: usize) {
-        let slot = hash % self.inner.len();
+    fn insert_entry(&mut self, mut entry: Entry<K, V>) {
+        let slot = entry.hash % self.inner.len();
 
         let spot = self.inner.get_mut(slot).unwrap();
         // If none exists at the required slot then we'll simply just insert into that slot.
         if let MapEntry::VacantEntry = spot {
-            let _ = std::mem::replace(spot, MapEntry::Occupied(Entry::new(key, value, hash, 0)));
-            return self.num_items += 1;
+            let _ = std::mem::replace(spot, MapEntry::Occupied(entry));
         } else {
             // Conflict. We'll try to resolve this conflict via a FCFS (first come first serve) approach.
             // That is, the first entry to come at the required slot will remain there, while all later entries will simply start
@@ -90,60 +89,81 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
 
             let mut i = slot;
 
-            // Start walking until we find an empty spot.
-            while i < self.inner.len() {
+            // Walk until we find an empty spot or we find a "rich" entry.
+            loop {
                 let cur = self.inner.get_mut(i).unwrap();
-                if let MapEntry::Occupied(entry) = cur {
-                    if *entry.get_key() == key {
+                if let MapEntry::Occupied(occupied_entry) = cur {
+                    if occupied_entry.key == entry.key {
                         // Update value
-                        let _ = std::mem::replace(entry, Entry::new(key, value, hash, i - slot));
+                        let _ = std::mem::replace(occupied_entry, entry);
+                        // Return to prevent updating num items.
                         return;
+                    }
+                    if entry.psl > occupied_entry.psl {
+                        let rich_entry = std::mem::replace(occupied_entry, entry);
+                        self.insert_entry(rich_entry);
+                        break;
                     }
 
                     i += 1;
                 } else {
                     // Insert entry into the vacancy.
-                    let _ = std::mem::replace(
-                        cur,
-                        MapEntry::Occupied(Entry::new(key, value, hash, i - slot)),
-                    );
-                    return self.num_items += 1;
+                    let _ = std::mem::replace(cur, MapEntry::Occupied(entry));
+                    break;
                 }
-            }
 
-            // Our probing has reached the end of the inner vector. We'll just push the entry to the back of the vector.
-            self.inner
-                .push(MapEntry::Occupied(Entry::new(key, value, hash, i - slot)));
-            return self.num_items += 1;
+                if i == self.inner.len() {
+                    // Our probing has reached the end of the inner vector. We'll just push the entry to the back of the vector.
+                    self.inner.push(MapEntry::Occupied(entry));
+                    break;
+                }
+
+                entry.psl += 1;
+            }
         }
+
+        self.num_items += 1;
     }
 
     /// Gets the appropriate value given a valid key. Returns `None` if the key value mapping does not exist.
     /// NOTE: Current implementation is somewhat inefficient in the case of failed lookups since we would just probe until the end of
     /// the backing vector. Ideally we should be storing the max PSL recorded so that we can smartly decide when to stop the probing.
+    ///
+    /// From the 2003 paper http://cglab.ca/~morin/publications/hashing/robinhood-siamjc.pdf:
+    /// We hash ~ alpha*n elements into a table of size n where each probe is independent and uniformly distributed
+    /// over the table, and alpha < 1 is a constant. Let M be the maximum search time for any of the elements in the table.
+    /// We show that with probability tending to one, M is in [log2log n + a, log2log n + b]
+    /// for some constants a and b depending upon alpha only. This is an exponential improvement
+    /// over the maximum search time in case of the standard FCFS collision strategy.
+    ///
+    /// In general, even in the worst case, we can effectively consider lookup to be O(1) time.
     pub fn get(&self, key: &K) -> Option<&V> {
         let hash = self.hash_key(key);
         let slot = hash % self.inner.len();
-        let mut i = slot;
+        let mut d = slot;
 
-        while i < self.inner.len() {
-            let cur = self.inner.get(i).unwrap();
+        while d < self.inner.len() {
+            let cur = self.inner.get(d).unwrap();
             if let MapEntry::Occupied(entry) = cur {
-                if *entry.get_key() == *key {
-                    return Some(entry.get_value());
+                if entry.key == *key {
+                    return Some(&entry.value);
+                }
+                // If we walked d steps and we encounter an entry that is some distance less than d from its home, we can stop.
+                if entry.psl < d {
+                    return None;
                 }
             } else {
                 return None;
             }
 
-            i += 1;
+            d += 1;
         }
 
         return None;
     }
 
-    /// Gets the size / number of entries of the hashmap.
-    pub fn size(&self) -> usize {
+    /// Gets the length / number of entries of the hashmap.
+    pub fn len(&self) -> usize {
         self.num_items
     }
 
@@ -152,6 +172,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         self.inner.len()
     }
 
+    /// Allocates a new map of a different size and then moves the contents of the previous map into it.
     fn resize(&mut self) {
         let target_size: usize = match self.inner.len() {
             0 => INITIAL_SIZE,
@@ -169,10 +190,8 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         });
 
         for entry in entries {
-            // Transfer ownership to the new hashmap.
-            let (key, value, hash) = entry.get_as_owned();
-            // No need of recomputing hashes again.
-            new_map.insert_with_hash(key, value, hash);
+            // Transfer ownership
+            new_map.insert_entry(entry);
         }
 
         // Replace with the new resized hashmap.
@@ -203,11 +222,16 @@ mod tests {
 
     #[test]
     fn it_inserts_values_without_initial_capacity() {
-        let mut hashmap: FxHashMap<&str, i32, FxBuildHasher> = FxHashMap::new();
-        let value_to_insert: i32 = 123;
+        let mut hashmap = FxHashMap::new();
 
-        hashmap.insert("hello", value_to_insert);
-        assert_eq!(*hashmap.get(&"hello").unwrap(), value_to_insert);
+        for x in 0..100 {
+            hashmap.insert(x, x + 1);
+        }
+
+        for x in 100..0 {
+            let val = hashmap.get(&x).unwrap();
+            assert_eq!(*val, x + 1);
+        }
     }
 
     #[test]
