@@ -1,2 +1,2 @@
-# fxhashmap
-A mostly from scratch implementation of a Robinhood HashMap (WIP) backed by the fx hashing algorithm.
+# Robinhood Hashmap built on top of the FX hasher
+Implementation of a basic Robinhood hashmap where the idea is to keep an FCFS approach but with the added condition that we'll evict an entry if it is "rich" (rich entry PSL is less than current entry PSL) and then reinsert the evicted entry with the same rules in place. We'll essentially have an arrangement such that for an entry to be pushed some distance **d**, it'll have been displaced by some other entry that travelled at least **d - 1**. An additional advantage of this rule being enforced is that we can stop probing on lookup based on this. If we walk **d** steps and come across an entry that is displaced by some distance less than **d** from its home, we can stop the probing.
