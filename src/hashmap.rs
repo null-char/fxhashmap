@@ -1,5 +1,6 @@
 use super::fx_build_hasher::FxBuildHasher;
 use super::map_entry::{Entry, MapEntry};
+use std::collections::hash_map::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
 
 const INITIAL_SIZE: usize = 4;
@@ -138,6 +139,14 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
     ///
     /// In general, even in the worst case, we can effectively consider lookup to be O(1) time.
     pub fn get(&self, key: &K) -> Option<&V> {
+        if let Some(entry) = self.get_entry(key) {
+            return Some(&entry.value);
+        } else {
+            return None;
+        }
+    }
+
+    fn get_entry(&self, key: &K) -> Option<&Entry<K, V>> {
         let hash = self.hash_key(key);
         let slot = hash % self.inner.len();
         let mut d = slot;
@@ -146,7 +155,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
             let cur = self.inner.get(d).unwrap();
             if let MapEntry::Occupied(entry) = cur {
                 if entry.key == *key {
-                    return Some(&entry.value);
+                    return Some(entry);
                 }
                 // If we walked d steps and we encounter an entry that is some distance less than d from its home, we can stop.
                 if entry.psl < d {
@@ -160,6 +169,30 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         }
 
         return None;
+    }
+
+    /// Clears all entries but preserves the allocated memory for use later.
+    pub fn clear(&mut self) {
+        let old_capacity = self.inner.len();
+        self.inner.clear();
+
+        let mut i = 0;
+        while i < old_capacity {
+            self.inner.push(MapEntry::VacantEntry);
+            i += 1;
+        }
+
+        self.num_items = 0;
+    }
+
+    /// Checks to see if a value is associated with the given key.
+    pub fn contains_key(&self, key: &K) -> bool {
+        let entry = self.get_entry(key);
+        if let Some(_) = entry {
+            return true;
+        } else {
+            return false;
+        }
     }
 
     /// Gets the length / number of entries of the hashmap.
@@ -228,6 +261,8 @@ mod tests {
             hashmap.insert(x, x + 1);
         }
 
+        assert_eq!(hashmap.len(), 100);
+
         for x in 100..0 {
             let val = hashmap.get(&x).unwrap();
             assert_eq!(*val, x + 1);
@@ -239,7 +274,6 @@ mod tests {
         let mut book_reviews = FxHashMap::with_capacity(10);
         let key = "The Adventures of Sherlock Holmes".to_string();
         let value = "Eye lyked it alot.".to_string();
-
         book_reviews.insert(key, value);
 
         assert_eq!(book_reviews.capacity(), 10);
@@ -249,5 +283,26 @@ mod tests {
                 .unwrap(),
             String::from("Eye lyked it alot.")
         );
+    }
+
+    #[test]
+    fn it_checks_if_entry_exists() {
+        let mut hashmap = FxHashMap::new();
+        hashmap.insert(1, 2);
+
+        assert_eq!(hashmap.contains_key(&1), true);
+        assert_eq!(hashmap.contains_key(&2), false);
+    }
+
+    #[test]
+    fn it_clears_all_entries() {
+        let mut hashmap = FxHashMap::with_capacity(69);
+        hashmap.insert(42, 0);
+        hashmap.insert(42, 1);
+        hashmap.clear();
+
+        assert_eq!(hashmap.capacity(), 69);
+        assert_eq!(hashmap.len(), 0);
+        assert_eq!(hashmap.contains_key(&42), false);
     }
 }
