@@ -1,7 +1,9 @@
 use super::fx_build_hasher::FxBuildHasher;
 use super::map_entry::{Entry, MapEntry};
-use std::collections::hash_map::HashMap;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::{
+    cmp::max,
+    hash::{BuildHasher, Hash, Hasher},
+};
 
 const INITIAL_SIZE: usize = 4;
 
@@ -13,6 +15,7 @@ pub struct FxHashMap<K: Hash + Eq, V, H: BuildHasher + Clone> {
     inner: Vec<MapEntry<K, V>>,
     hasher_builder: H,
     num_items: usize,
+    max_psl: usize,
 }
 
 impl<K: Hash + Eq, V> FxHashMap<K, V, FxBuildHasher> {
@@ -24,6 +27,7 @@ impl<K: Hash + Eq, V> FxHashMap<K, V, FxBuildHasher> {
             inner: Vec::new(),
             hasher_builder,
             num_items: 0,
+            max_psl: 0,
         }
     }
 
@@ -38,6 +42,7 @@ impl<K: Hash + Eq, V> FxHashMap<K, V, FxBuildHasher> {
             inner,
             hasher_builder,
             num_items: 0,
+            max_psl: 0,
         }
     }
 }
@@ -50,6 +55,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
             inner: Vec::new(),
             hasher_builder,
             num_items: 0,
+            max_psl: 0,
         }
     }
 
@@ -65,7 +71,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
 
     /// Inserts a value with its associated key into the hashmap. Time complexity should be amortized O(1).
     pub fn insert(&mut self, key: K, value: V) {
-        // Load Factor of 0.75 (can be upped to 0.85 or so once robinhood implementation is complete)
+        // Load Factor of 0.75
         if self.inner.is_empty() || self.num_items > 3 * self.inner.len() / 4 {
             self.resize();
         }
@@ -75,69 +81,58 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         self.insert_entry(Entry::new(key, value, hash, 0));
     }
 
+    pub fn remove(&mut self, key: K) {}
+
     fn insert_entry(&mut self, mut entry: Entry<K, V>) {
         let slot = entry.hash % self.inner.len();
+        let mut i = slot;
 
-        let spot = self.inner.get_mut(slot).unwrap();
-        // If none exists at the required slot then we'll simply just insert into that slot.
-        if let MapEntry::VacantEntry = spot {
-            let _ = std::mem::replace(spot, MapEntry::Occupied(entry));
-        } else {
-            // Conflict. We'll try to resolve this conflict via a FCFS (first come first serve) approach.
-            // That is, the first entry to come at the required slot will remain there, while all later entries will simply start
-            // walking until they find an empty spot.
-            // In the future we'll use the robinhood method to decrease variance.
-
-            let mut i = slot;
-
-            // Walk until we find an empty spot or we find a "rich" entry.
-            loop {
-                let cur = self.inner.get_mut(i).unwrap();
-                if let MapEntry::Occupied(occupied_entry) = cur {
-                    if occupied_entry.key == entry.key {
-                        // Update value
-                        let _ = std::mem::replace(occupied_entry, entry);
-                        // Return to prevent updating num items.
-                        return;
-                    }
-                    if entry.psl > occupied_entry.psl {
-                        let rich_entry = std::mem::replace(occupied_entry, entry);
-                        self.insert_entry(rich_entry);
-                        break;
-                    }
-
-                    i += 1;
-                } else {
-                    // Insert entry into the vacancy.
-                    let _ = std::mem::replace(cur, MapEntry::Occupied(entry));
-                    break;
-                }
-
-                if i == self.inner.len() {
-                    // Our probing has reached the end of the inner vector. We'll just push the entry to the back of the vector.
-                    self.inner.push(MapEntry::Occupied(entry));
-                    break;
-                }
-
-                entry.psl += 1;
+        loop {
+            let cur = self.inner.get_mut(i);
+            // We've probably reached the end of the backing vector after probing and not finding an empty spot. We'll just append the new entry at this point.
+            if let None = cur {
+                self.inner.push(MapEntry::Occupied(entry));
+                break;
             }
+
+            let cur = cur.unwrap();
+            if let MapEntry::Occupied(occupied_entry) = cur {
+                if occupied_entry.key == entry.key {
+                    // Update value
+                    let _ = std::mem::replace(occupied_entry, entry);
+                    // Return to prevent updating num items.
+                    return;
+                }
+
+                if entry.psl > occupied_entry.psl {
+                    std::mem::swap(&mut entry, occupied_entry);
+                    continue;
+                }
+
+                i += 1;
+            } else {
+                // Insert entry into the vacancy.
+                let _ = std::mem::replace(cur, MapEntry::Occupied(entry));
+                break;
+            }
+
+            entry.psl += 1;
+            self.max_psl = max(self.max_psl, entry.psl);
         }
 
         self.num_items += 1;
     }
 
     /// Gets the appropriate value given a valid key. Returns `None` if the key value mapping does not exist.
-    /// NOTE: Current implementation is somewhat inefficient in the case of failed lookups since we would just probe until the end of
-    /// the backing vector. Ideally we should be storing the max PSL recorded so that we can smartly decide when to stop the probing.
     ///
-    /// From the 2003 paper http://cglab.ca/~morin/publications/hashing/robinhood-siamjc.pdf:
+    /// From http://cglab.ca/~morin/publications/hashing/robinhood-siamjc.pdf:
     /// We hash ~ alpha*n elements into a table of size n where each probe is independent and uniformly distributed
     /// over the table, and alpha < 1 is a constant. Let M be the maximum search time for any of the elements in the table.
     /// We show that with probability tending to one, M is in [log2log n + a, log2log n + b]
     /// for some constants a and b depending upon alpha only. This is an exponential improvement
     /// over the maximum search time in case of the standard FCFS collision strategy.
     ///
-    /// In general, even in the worst case, we can effectively consider lookup to be O(1) time.
+    /// tl;dr - In general, even in the worst case, we can effectively consider lookup to be O(1) time.
     pub fn get(&self, key: &K) -> Option<&V> {
         if let Some(entry) = self.get_entry(key) {
             return Some(&entry.value);
@@ -146,6 +141,9 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         }
     }
 
+    /// There are some additional (minor) optimizations in place here. Namely:
+    /// We return nothing if we encounter an entry with a psl less than the number of steps we've walked.
+    /// We return nothing if the number of steps we've walked exceeds the maximum psl value ever recorded.
     fn get_entry(&self, key: &K) -> Option<&Entry<K, V>> {
         let hash = self.hash_key(key);
         let slot = hash % self.inner.len();
@@ -157,8 +155,14 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
                 if entry.key == *key {
                     return Some(entry);
                 }
+
                 // If we walked d steps and we encounter an entry that is some distance less than d from its home, we can stop.
                 if entry.psl < d {
+                    return None;
+                }
+
+                // Our probing has reached to a point where it is impossible to find an entry this far out from home so we can confidently return None.
+                if d > self.max_psl {
                     return None;
                 }
             } else {
