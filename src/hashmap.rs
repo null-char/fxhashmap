@@ -3,23 +3,24 @@ use super::map_entry::{Entry, MapEntry};
 use std::{
     cmp::max,
     hash::{BuildHasher, Hash, Hasher},
+    ptr,
 };
 
 const INITIAL_SIZE: usize = 4;
 
 // TODO: Complete robinhood implementation.
 
-/// Robinhood HashMap backed by the fx hashing algorithm.
+/// Robinhood HashMap backed by the fx hashing algorithm (by default).
 #[derive(Debug)]
-pub struct FxHashMap<K: Hash + Eq, V, H: BuildHasher + Clone> {
+pub struct RHMap<K: Hash + Eq, V, H: BuildHasher + Clone> {
     inner: Vec<MapEntry<K, V>>,
     hasher_builder: H,
     num_items: usize,
     max_psl: usize,
 }
 
-impl<K: Hash + Eq, V> FxHashMap<K, V, FxBuildHasher> {
-    /// Creates a `FxHashMap` with the default Fx Hasher and an initial capacity of 0.
+impl<K: Hash + Eq, V> RHMap<K, V, FxBuildHasher> {
+    /// Creates a `RHMap` with the default Fx Hasher and an initial capacity of 0.
     pub fn new() -> Self {
         let hasher_builder = FxBuildHasher::new();
 
@@ -31,7 +32,7 @@ impl<K: Hash + Eq, V> FxHashMap<K, V, FxBuildHasher> {
         }
     }
 
-    /// Constructs a `FxHashMap` with an initial capacity. This method of constructing is recommended if you have a good idea of how large
+    /// Constructs a `RHMap` with an initial capacity. This method of constructing is recommended if you have a good idea of how large
     /// your hashmap will grow as this reduces the number of resizes.
     pub fn with_capacity(initial_capacity: usize) -> Self {
         let hasher_builder = FxBuildHasher::new();
@@ -47,8 +48,8 @@ impl<K: Hash + Eq, V> FxHashMap<K, V, FxBuildHasher> {
     }
 }
 
-impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
-    /// Creates a `FxHashMap` with a custom hasher builder which overrides the default fx hasher. Use this if you want to create a
+impl<K: Hash + Eq, V, H: BuildHasher + Clone> RHMap<K, V, H> {
+    /// Creates a `RHMap` with a custom hasher builder which overrides the default fx hasher. Use this if you want to create a
     /// robinhood hashmap but with a custom hasher perhaps to provide greater cryptographic security.
     pub fn with_hasher(hasher_builder: H) -> Self {
         Self {
@@ -59,9 +60,9 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         }
     }
 
-    /// Creates a `FxHashMap` with both an initial capacity and a custom hasher.
+    /// Creates a `RHMap` with both an initial capacity and a custom hasher.
     pub fn with_capacity_and_hasher(initial_capacity: usize, hasher_builder: H) -> Self {
-        let mut map = FxHashMap::with_hasher(hasher_builder);
+        let mut map = RHMap::with_hasher(hasher_builder);
         let mut inner: Vec<MapEntry<K, V>> = Vec::with_capacity(initial_capacity);
         inner.extend((0..initial_capacity).map(|_| MapEntry::default()));
         map.inner = inner;
@@ -81,7 +82,63 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         self.insert_entry(Entry::new(key, value, hash, 0));
     }
 
-    pub fn remove(&mut self, key: K) {}
+    /// Deletes the entry with the given key. Returns an `Err` if no such entry with the provided key exists.
+    pub fn remove(&mut self, key: &K) -> Result<(), &'static str> {
+        // We're going to go with an interesting approach called backward shift deletion here
+        let res = self.get_entry(&key);
+        if let Some(entry) = res {
+            let len = self.inner.len();
+            let slot = entry.hash % len;
+            // Index position of the entry to be deleted
+            let i = slot + entry.psl;
+            // To keep track of where the bucket ends so that we can shift all entries to the right of the entry
+            // to be deleted to the left.
+            let mut j = i + 1;
+
+            // This is possible if the entry to be deleted is actually the last element
+            // of the inner vector. In this case, we actually don't have any elements (to the left) to shift
+            // so all we do is directly overwrite the value at index i to be a `MapEntry::VacantEntry`
+            if j >= self.inner.len() {
+                self.inner[i] = MapEntry::VacantEntry;
+                self.num_items -= 1;
+                return Ok(());
+            }
+
+            loop {
+                let cur = self.inner.get(j).unwrap();
+
+                // We overflow the bucket if we find an entry with psl == 0.
+                // We can also stop if we see a vacant entry because there can't be any valid
+                // occupied entries after a vacant entry (unless we overflow to the next bucket)
+                if let MapEntry::Occupied(entry) = cur {
+                    if entry.psl == 0 {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+
+                j += 1;
+            }
+
+            // unsafe because UB if we go out of bounds, any of the pointers are invalid or we mess up the vec pointer while modifying
+            // we should guarantee that indices i and j are within bounds
+            unsafe {
+                // Replace the entry to be deleted by shifting j - i - 1 elements to the left, overwriting
+                // the entry to be deleted in the process
+                let entry_ptr = self.inner.as_mut_ptr().add(i);
+                ptr::copy(entry_ptr.offset(1), entry_ptr, j - i - 1);
+                // We have to ensure that we add back in a `VacantEntry` after shifting all the elements of the bucket
+                // thereby taking the place of the deleted entry in order to not mess up the vec's structure.
+                ptr::write(entry_ptr.add(j - i - 1), MapEntry::VacantEntry);
+            }
+
+            self.num_items -= 1;
+            return Ok(());
+        } else {
+            return Err("Entry not found");
+        }
+    }
 
     fn insert_entry(&mut self, mut entry: Entry<K, V>) {
         let slot = entry.hash % self.inner.len();
@@ -90,6 +147,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
         loop {
             let cur = self.inner.get_mut(i);
             // We've probably reached the end of the backing vector after probing and not finding an empty spot. We'll just append the new entry at this point.
+            // I'm not sure if this can ever happen but I'll just put it in here as a failsafe
             if let None = cur {
                 self.inner.push(MapEntry::Occupied(entry));
                 break;
@@ -157,11 +215,12 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> FxHashMap<K, V, H> {
                 }
 
                 // If we walked d steps and we encounter an entry that is some distance less than d from its home, we can stop.
-                if entry.psl < d {
+                // OR: Our probing has reached to a point where it is impossible to find an entry this far out from home so we
+                // can confidently stop in this case as well.
+                if entry.psl < d || d > self.max_psl {
                     return None;
                 }
 
-                // Our probing has reached to a point where it is impossible to find an entry this far out from home so we can confidently return None.
                 if d > self.max_psl {
                     return None;
                 }
@@ -251,15 +310,14 @@ mod tests {
     #[test]
     fn it_constructs_with_an_initial_capacity() {
         let initial_capacity = 5;
-        let hashmap: FxHashMap<&str, i32, FxBuildHasher> =
-            FxHashMap::with_capacity(initial_capacity);
+        let hashmap: RHMap<&str, i32, FxBuildHasher> = RHMap::with_capacity(initial_capacity);
 
         assert_eq!(hashmap.capacity(), initial_capacity);
     }
 
     #[test]
     fn it_inserts_values_without_initial_capacity() {
-        let mut hashmap = FxHashMap::new();
+        let mut hashmap = RHMap::new();
 
         for x in 0..100 {
             hashmap.insert(x, x + 1);
@@ -275,7 +333,7 @@ mod tests {
 
     #[test]
     fn it_inserts_values_with_initial_capacity() {
-        let mut book_reviews = FxHashMap::with_capacity(10);
+        let mut book_reviews = RHMap::with_capacity(10);
         let key = "The Adventures of Sherlock Holmes".to_string();
         let value = "Eye lyked it alot.".to_string();
         book_reviews.insert(key, value);
@@ -291,7 +349,7 @@ mod tests {
 
     #[test]
     fn it_checks_if_entry_exists() {
-        let mut hashmap = FxHashMap::new();
+        let mut hashmap = RHMap::new();
         hashmap.insert(1, 2);
 
         assert_eq!(hashmap.contains_key(&1), true);
@@ -300,13 +358,47 @@ mod tests {
 
     #[test]
     fn it_clears_all_entries() {
-        let mut hashmap = FxHashMap::with_capacity(69);
+        let mut hashmap = RHMap::with_capacity(70);
         hashmap.insert(42, 0);
         hashmap.insert(42, 1);
         hashmap.clear();
 
-        assert_eq!(hashmap.capacity(), 69);
+        assert_eq!(hashmap.capacity(), 70);
         assert_eq!(hashmap.len(), 0);
         assert_eq!(hashmap.contains_key(&42), false);
+    }
+
+    #[test]
+    #[allow(unused_must_use)]
+    fn it_removes_entries() {
+        let mut hashmap = RHMap::new();
+        hashmap.insert(1, 2);
+        hashmap.insert(4, 2);
+        hashmap.insert(7, 2);
+        hashmap.insert(3, 2);
+        hashmap.insert(9, 2);
+
+        hashmap.remove(&4);
+        hashmap.remove(&1);
+        hashmap.remove(&7);
+        hashmap.remove(&3);
+
+        assert!(!hashmap.contains_key(&4));
+        assert!(!hashmap.contains_key(&1));
+        assert!(!hashmap.contains_key(&7));
+        assert!(!hashmap.contains_key(&3));
+        assert_eq!(hashmap.len(), 4)
+    }
+
+    #[test]
+    #[allow(unused_must_use)]
+    fn it_removes_edge_case_entry() {
+        // An edge case entry
+        let mut hashmap = RHMap::with_capacity(1);
+        hashmap.insert(1, 2);
+        hashmap.remove(&1);
+        assert!(!hashmap.contains_key(&1));
+        assert_eq!(hashmap.len(), 0);
+        assert_eq!(hashmap.capacity(), 1);
     }
 }
