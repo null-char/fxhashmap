@@ -3,12 +3,10 @@ use super::map_entry::{Entry, MapEntry};
 use std::{
     cmp::max,
     hash::{BuildHasher, Hash, Hasher},
-    ptr,
+    ptr, vec,
 };
 
 const INITIAL_SIZE: usize = 4;
-
-// TODO: Complete robinhood implementation.
 
 /// Robinhood HashMap backed by the fx hashing algorithm (by default).
 #[derive(Debug)]
@@ -234,6 +232,28 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> RHMap<K, V, H> {
         return None;
     }
 
+    // Returns a vec of key value pairs in the hashmap
+    pub fn entries(&self) -> Vec<(&K, &V)> {
+        self.inner
+            .iter()
+            .filter_map(|e| {
+                if let MapEntry::Occupied(entry) = e {
+                    return Some((&entry.key, &entry.value));
+                } else {
+                    return None;
+                }
+            })
+            .collect()
+    }
+
+    pub fn keys(&self) -> Vec<&K> {
+        self.entries().iter().map(|(k, _)| *k).collect()
+    }
+
+    pub fn values(&self) -> Vec<&V> {
+        self.entries().iter().map(|(_, v)| *v).collect()
+    }
+
     /// Clears all entries but preserves the allocated memory for use later.
     pub fn clear(&mut self) {
         let old_capacity = self.inner.len();
@@ -299,6 +319,63 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> RHMap<K, V, H> {
         let mut hasher = self.hasher_builder.build_hasher();
         key.hash(&mut hasher);
         hasher.finish() as usize
+    }
+}
+
+impl<K: Eq + Hash, V, H: BuildHasher + Clone> IntoIterator for RHMap<K, V, H> {
+    type Item = (K, V);
+    type IntoIter = vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner
+            .into_iter()
+            .filter_map(|e| {
+                if let MapEntry::Occupied(entry) = e {
+                    return Some((entry.key, entry.value));
+                } else {
+                    return None;
+                }
+            })
+            .collect::<Vec<(K, V)>>()
+            .into_iter()
+    }
+}
+
+impl<'a, K: Eq + Hash, V, H: BuildHasher + Clone> IntoIterator for &'a RHMap<K, V, H> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner
+            .iter()
+            .filter_map(|e| {
+                if let MapEntry::Occupied(entry) = e {
+                    return Some((&entry.key, &entry.value));
+                } else {
+                    return None;
+                }
+            })
+            .collect::<Vec<(&K, &V)>>()
+            .into_iter()
+    }
+}
+
+impl<'a, K: Eq + Hash, V, H: BuildHasher + Clone> IntoIterator for &'a mut RHMap<K, V, H> {
+    type Item = (&'a K, &'a mut V);
+    type IntoIter = vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner
+            .iter_mut()
+            .filter_map(|e| {
+                if let MapEntry::Occupied(entry) = e {
+                    return Some((&entry.key, &mut entry.value));
+                } else {
+                    return None;
+                }
+            })
+            .collect::<Vec<(&K, &mut V)>>()
+            .into_iter()
     }
 }
 
@@ -400,5 +477,36 @@ mod tests {
         assert!(!hashmap.contains_key(&1));
         assert_eq!(hashmap.len(), 0);
         assert_eq!(hashmap.capacity(), 1);
+    }
+
+    #[test]
+    fn it_iterates_over_entries() {
+        let mut hashmap = RHMap::new();
+        let kvs = vec![("A", "B"), ("C", "D"), ("X", "Y")];
+
+        for kv in &kvs {
+            hashmap.insert(kv.0, kv.1);
+        }
+
+        for kv in hashmap {
+            assert!(kvs.contains(&kv));
+        }
+    }
+
+    #[test]
+    fn it_iterates_and_mutates_over_entries() {
+        let mut hashmap = RHMap::new();
+
+        for x in 0..100 {
+            hashmap.insert(x, x);
+        }
+
+        for (_, v) in &mut hashmap {
+            *v += 1;
+        }
+
+        for (k, v) in &hashmap {
+            assert_eq!(k + 1, *v);
+        }
     }
 }
