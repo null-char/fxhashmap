@@ -68,7 +68,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> RHMap<K, V, H> {
         map
     }
 
-    /// Inserts a value with its associated key into the hashmap. Time complexity should be amortized O(1).
+    /// Inserts a value with its associated key into the hashmap.
     pub fn insert(&mut self, key: K, value: V) {
         // Load Factor of 0.75
         if self.inner.is_empty() || self.num_items > 3 * self.inner.len() / 4 {
@@ -218,10 +218,6 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> RHMap<K, V, H> {
                 if entry.psl < d || d > self.max_psl {
                     return None;
                 }
-
-                if d > self.max_psl {
-                    return None;
-                }
             } else {
                 return None;
             }
@@ -230,28 +226,6 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> RHMap<K, V, H> {
         }
 
         return None;
-    }
-
-    // Returns a vec of key value pairs in the hashmap
-    pub fn entries(&self) -> Vec<(&K, &V)> {
-        self.inner
-            .iter()
-            .filter_map(|e| {
-                if let MapEntry::Occupied(entry) = e {
-                    return Some((&entry.key, &entry.value));
-                } else {
-                    return None;
-                }
-            })
-            .collect()
-    }
-
-    pub fn keys(&self) -> Vec<&K> {
-        self.entries().iter().map(|(k, _)| *k).collect()
-    }
-
-    pub fn values(&self) -> Vec<&V> {
-        self.entries().iter().map(|(_, v)| *v).collect()
     }
 
     /// Clears all entries but preserves the allocated memory for use later.
@@ -268,7 +242,7 @@ impl<K: Hash + Eq, V, H: BuildHasher + Clone> RHMap<K, V, H> {
         self.num_items = 0;
     }
 
-    /// Checks to see if a value is associated with the given key.
+    /// Checks to see if the provided key is associated with any value.
     pub fn contains_key(&self, key: &K) -> bool {
         let entry = self.get_entry(key);
         if let Some(_) = entry {
